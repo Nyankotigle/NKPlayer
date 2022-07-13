@@ -1,0 +1,6 @@
+# Write your default config options here!
+
+subcp = "cp936"
+subfont-encoding = "unicode"
+font = "C:\\Program Files\\SMPlayer\\mplayer\\mplayer\\subfont.ttf"
+subfont-text-scale = "3.000000"

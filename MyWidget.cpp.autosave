@@ -1,0 +1,963 @@
+﻿#include "MyWidget.h"
+#include <QDebug>
+#include <QFileDialog>
+#include <QTimer>
+#include <QFile>
+#include <QMessageBox>
+//#include <QVideoWidget>
+//#include <QMediaPlayer>
+//#include <QMediaPlaylist>
+
+
+MyWidget::MyWidget(QWidget *parent)
+    : QWidget(parent)
+{
+    this->setWindowFlag(Qt::FramelessWindowHint);//去除窗口标题栏
+    this->resize(1400,850);//窗口初始大小
+
+    lay = new QVBoxLayout(this);
+    lay1 = new QHBoxLayout(this);
+    lay2 = new QHBoxLayout(this);
+    lay->addWidget(&_show);//视频
+    lay->addLayout(lay1);//进度条
+    lay->addLayout(lay2);//功能按钮
+
+    //lay1放当前时间，进度条，总时间
+    lay1->addWidget(_label4=new QLabel);
+    lay1->addWidget(_slider1 = new QSlider(Qt::Horizontal));
+    lay1->addWidget(_label5=new QLabel);
+    _label4->setMaximumHeight(20);//设置label的最大高度
+    _label5->setMaximumHeight(20);//否则会导致lay1过高
+
+    _slider1->setMinimum(0);
+    _slider1->setMaximum(10000);
+    _slider1->setFocusPolicy(Qt::NoFocus);
+
+
+    lay2->addWidget(_button2=new QPushButton(QStringLiteral("打开文件")));
+    //将所有button都设置为NoFocus，避免button响应键盘消息影响使用键盘快捷键
+    _button2->setFocusPolicy(Qt::NoFocus);
+    lay2->addWidget(_button3=new QPushButton(QStringLiteral("打开字幕")));
+    _button3->setFocusPolicy(Qt::NoFocus);
+    lay2->addWidget(_button8=new QPushButton(QStringLiteral("字幕提前")));
+    _button8->setFocusPolicy(Qt::NoFocus);
+    lay2->addWidget(_button7=new QPushButton(QStringLiteral("字幕滞后")));
+    _button7->setFocusPolicy(Qt::NoFocus);
+
+    lay2->addWidget(_label1=new QLabel(QStringLiteral("音量")));
+    //音量滑杆
+    lay2->addWidget(_slider2=new QSlider(Qt::Horizontal));
+    _slider2->setFocusPolicy(Qt::NoFocus);
+    _slider2->setMinimum(0);
+    _slider2->setMaximum(100);
+
+    //播放器标志
+    lay2->addWidget(_label3=new QLabel);
+
+    lay2->addWidget(_label2=new QLabel(QStringLiteral("速度")));
+    //播放速度滑杆
+    lay2->addWidget(_slider3=new QSlider(Qt::Horizontal));
+    _slider3->setFocusPolicy(Qt::NoFocus);
+    _slider3->setMinimum(5);
+    _slider3->setMaximum(30);
+
+    lay2->addWidget(_button1=new QPushButton(QStringLiteral("字幕乱码")));
+    _button1->setFocusPolicy(Qt::NoFocus);
+    lay2->addWidget(_button4=new QPushButton(QStringLiteral("最小化")));
+    _button4->setFocusPolicy(Qt::NoFocus);
+    lay2->addWidget(_button5=new QPushButton(QStringLiteral("全屏/活动")));
+    _button5->setFocusPolicy(Qt::NoFocus);
+    lay2->addWidget(_button6=new QPushButton(QStringLiteral("关闭窗口")));
+    _button6->setFocusPolicy(Qt::NoFocus);
+
+    ReadSetting();//读取设置项
+    //打开文件模态对话框
+    QString directory = QFileDialog::getOpenFileName(
+                this,
+                tr("Choose video file"),
+                _strDir,
+                "All files(*.*);;(*.mp4);;(*.mkv);;(*.avi);;(*.rmvb);;(*.flv);;(*.gif)");
+    if (directory.isEmpty()) exit(1);
+    QFileInfo fileInfo(directory);//获取文件目录
+    _strDir = fileInfo.filePath();//保存这次打开文件目录
+
+    QStringList args;
+    args << "-slave";//使用管道命令
+    args << "-quiet";
+    args << "-zoom";
+    args << directory;
+    //获取当前窗口号，并将mplayer的输出嵌入当前窗口中
+    args << "-wid" << QString::number(_show.winId());//将_show的窗口号转换为字符串添加在-wid后面
+
+    VideoProcess.start(tr("C:\\Program Files\\SMPlayer\\mplayer\\mplayer.exe"), args);
+    VideoProcess.write(QString("mute 1\n").toUtf8());//一开始静音
+    VideoProcess.write(QString("vo_fullscreen\n").toUtf8());//_show窗口全屏
+
+    connect(_slider1, SIGNAL(sliderReleased()), this , SLOT(slotOnSlider1Released()));
+    connect(_slider1, SIGNAL(sliderPressed()), this , SLOT(slotOnslider1Pressed()));
+    connect(_slider1, SIGNAL(valueChanged(int)), this , SLOT(slotOnslider1ValueChanged(int)));
+    connect(_slider2, SIGNAL(valueChanged(int)), this , SLOT(slotOnSlider2Changed(int)));
+    connect(_slider3, SIGNAL(valueChanged(int)), this , SLOT(slotOnSlider3Changed(int)));
+    connect(_button1, SIGNAL(clicked()), this , SLOT(slotButton1Clicked()));
+    connect(_button2, SIGNAL(clicked()), this , SLOT(slotButton2Clicked()));
+    connect(_button3, SIGNAL(clicked()), this , SLOT(slotButton3Clicked()));
+    connect(_button4, SIGNAL(clicked()), this , SLOT(slotButton4Clicked()));
+    connect(_button5, SIGNAL(clicked()), this , SLOT(slotButton5Clicked()));
+    connect(_button6, SIGNAL(clicked()), this , SLOT(slotButton6Clicked()));
+    connect(_button7, SIGNAL(clicked()), this , SLOT(slotButton7Clicked()));
+    connect(_button8, SIGNAL(clicked()), this , SLOT(slotButton8Clicked()));
+
+    //每隔一秒，查询一次视频当前播放的时间
+    timerGetTime = new QTimer;
+    connect(timerGetTime, SIGNAL(timeout()), this, SLOT(slotGetTime()));
+    timerGetTime->setInterval(100);
+    timerGetTime->start();
+
+    //延迟500ms后再开始查询时间，避免手动调整滑块位置后，播放时间没能及时更新
+    timerDelayGetTime = new QTimer;
+    connect(timerDelayGetTime, SIGNAL(timeout()), this, SLOT(slotTimerDelayGetTimeOut()));
+    timerDelayGetTime->setInterval(500);
+    timerDelayGetTime->setSingleShot(true);
+
+    SetAllStyle(nowStyleKind);
+}
+
+//读取配置文件
+void MyWidget::ReadSetting()
+{
+    QFile file("Setting");//指定文件
+    file.open(QIODevice::ReadWrite);//读写模式打开指定的文件
+    //读取上次设置的样式
+    file.seek(1);//定位到第1个字节
+    nowStyleKind = file.read(1).toInt();
+    //读取上次打开文件的目录
+    file.seek(3);
+    _strDir = file.readLine();
+    _strDir.resize(_strDir.size()-1);//去掉结尾的换行符
+    file.close();
+}
+
+
+void MyWidget::slotGetTime()
+{
+    //当视频暂停时不查询时间，否则视频会自动播放
+    //当通过鼠标拖动滑块、左右方向键改变播放进度时，不查询时间，防止时间设置冲突
+    //### 这里也可以通过在以下几个bool变量变true的位置调用timerGetTime->stop()，
+    //### 变true的位置调用timerGetTime->start()来实现
+    if(isPause||slider1_isPressed||key_RL_isPressed) return;
+
+    VideoProcess.write(QString("get_time_length\n").toUtf8());//获取总时间
+    VideoProcess.write(QString("get_time_pos\n").toUtf8());//获取当前时间
+    QByteArray gettime = VideoProcess.readAll();//读取结果
+
+    //当通过拖动滑块，左右方向键调整视频进度后，紧接着查询的当前播放信息尚未更新
+    //需要查询几次后才会更新结果，此时的查询结果不可用
+    //解决了当手动调整视频进度后，进度条和左侧当前时间闪回到调整前的值的问题
+    if(canReadTimeValue==true){
+        //从结果字符串中提取出两个时间的字符串
+        QByteArray timeAll, timeNow;
+        bool isGet = false;
+        bool gotAll = false;
+        for(int i=0;i<gettime.size();i++)
+        {
+            if(gettime.at(i)=='='){
+                isGet = true;
+                continue;
+            }
+            if(gettime.at(i)=='.'){
+                isGet = false;
+                gotAll = true;
+                continue;
+            }
+            if(isGet==true && gotAll==false){
+                timeAll += gettime.at(i);
+            }
+            if(isGet==true && gotAll==true){
+                timeNow += gettime.at(i);
+            }
+        }
+        //qDebug() <<timeAll.toInt()<<" , "<< timeNow.toInt();
+
+        //当所获取的总秒数和当前秒数都不为0时，显示并记录相应的值
+        //避免有时获取失败得到的值为0，尤其当使用滑块调整进度时
+        if(timeAll.toInt()!=0 && timeNow.toInt()!=0){
+            //将提取出的以秒为单位的时间字符串，转换为"分钟:秒钟"格式字符串
+            QString showNowTime, showAllTime;
+            showNowTime += QString::number(timeNow.toInt()/60);
+            showNowTime += ":";
+            showNowTime += QString::number(timeNow.toInt()%60);
+            showAllTime += QString::number(timeAll.toInt()/60);
+            showAllTime += ":";
+            showAllTime += QString::number(timeAll.toInt()%60);
+            //将最终得到的时间字符串显示在两个label上
+            _label4->setText(showNowTime);
+            _label5->setText(showAllTime);
+            //当获取的记录整数类型的总秒数、当前秒数
+            secAll = timeAll.toInt();
+            secNow = timeNow.toInt();
+            //将进度条的最大值设为总秒数
+            _slider1->setRange(0,secAll);
+            _slider1->setValue(secNow);
+        }
+    }
+}
+void MyWidget::slotTimerDelayGetTimeOut()
+{
+    canReadTimeValue = true;//开始读取查询结果中的时间
+}
+
+void MyWidget::slotOnSlider1Released()
+{
+    slider1_isPressed = false;//鼠标释放滑块
+    //seek的最后一个参数，模式为1，表示寻找到视频value%的地方开始播放，模式为2，表示寻找到value秒处开始播放
+
+    //当鼠标拖动滑块改变进度完成鼠标释放时，将视频的进度设置为当前滑块位置所表示的值
+    VideoProcess.write(QString("seek %1 2\n").arg(_slider1->value()).toUtf8());
+    //延迟500ms后再开始读取查询结果中的时间
+    timerDelayGetTime->start();
+
+    //如果调整播放进度时，视频为暂停状态，则将其切换为播放状态
+    //否则当进度调整完毕时，视频自动变为播放状态，但此时记录的仍然是暂停状态，导致时间不更新
+    if(isPause){
+        VideoProcess.write(QString("pause\n").toUtf8());
+        isPause = 1-isPause;//暂停\播放状态切换
+    }
+}
+void MyWidget::slotOnslider1Pressed()
+{
+    slider1_isPressed = true;//鼠标按下滑块
+    canReadTimeValue = false;//暂停读取查询结果中的时间
+}
+void MyWidget::slotOnslider1ValueChanged(int value)
+{
+    //当鼠标拖动滑块使得滑块的值改变时，左侧的当前时间跟着变化
+    if(slider1_isPressed){
+        QString showNowTime;
+        showNowTime += QString::number(value/60);
+        showNowTime += ":";
+        showNowTime += QString::number(value%60);
+        _label4->setText(showNowTime);
+    }
+}
+
+
+void MyWidget::slotOnSlider2Changed(int value)
+{
+    //调整音量大小
+    VideoProcess.write(QString("volume %1 1\n").arg(value).toUtf8());
+}
+void MyWidget::slotOnSlider3Changed(int value)
+{
+    //调整播放速度
+    double speed = double(value);
+    speed /= 10;
+    VideoProcess.write(QString("speed_set  %1 1\n").arg(speed).toUtf8());
+}
+
+//转换字幕编码
+void MyWidget::slotButton1Clicked()
+{
+    //若字幕路径为空，即没有打开字幕，则不响应
+    if (_strSub.isEmpty())return;
+
+    //打开配置文件
+    QFile file("Setting");
+    file.open(QIODevice::ReadWrite);
+    //定位到NotePad++路径开始处
+    file.seek(300);
+    //如果NotePad++路径为空
+    if(file.read(1).isEmpty()){
+        //获取NotePad++.exe路径
+        _strNotePad = QFileDialog::getOpenFileName(
+                    this,
+                    tr("Find notepad++.exe"),
+                    "/",
+                    "(*.exe)");
+        //未找到路径，不响应
+        if (_strNotePad.isEmpty()) return;
+        //找到路径后，将其写入配置文件相应位置
+        file.seek(300);
+        QString strNotePad;
+        strNotePad += _strNotePad;
+        strNotePad += "\n";
+        file.write(strNotePad.toUtf8());
+    }
+    //若配置文件中的NotePad++路径不为空，则读取路径
+    file.seek(300);
+    _strNotePad = file.readLine();
+    _strNotePad.resize(_strNotePad.size()-1);//去掉最后的换行符
+    //qDebug() << _strNotePad;
+    file.close();
+
+    //在新进程中打开Notepad++
+    QStringList argv;
+    argv += _strSub;
+    //用Notepad++打开此字幕
+    SubtransProcess.start(_strNotePad , argv);
+    //当进程结束，即字幕编码转换完成时重新加载此字幕
+    connect(&SubtransProcess,SIGNAL(finished(int)), this ,SLOT(slotSubTransformed(int)));
+}
+void MyWidget::slotSubTransformed(int)
+{
+    //重新加载字幕
+    //构造加载字幕命令："sub_load directory\n"
+    QString sub;
+    sub += "sub_load ";
+    sub += _strSub;
+    sub += "\n";
+    VideoProcess.write(sub.toUtf8());//加载字幕
+    VideoProcess.write(QString("sub_file 1\n").toUtf8());//显示字幕
+}
+
+
+void MyWidget::slotButton2Clicked()
+{
+    //打开文件
+    VideoProcess.write(QString("quit\n").toUtf8());
+    VideoProcess.close();
+
+    QString directory = QFileDialog::getOpenFileName(
+                this,
+                tr("Choose video file"),
+                _strDir,
+                "All files(*.*);;(*.mp4);;(*.mkv);;(*.avi);;(*.rmvb);;(*.flv);;(*.gif)");
+    if (directory.isEmpty()) exit(1);
+    QFileInfo fileInfo(directory);//获取文件目录
+    _strDir = fileInfo.filePath();//保存这次打开文件目录
+
+    QStringList args;
+    args << "-slave";//使用管道命令
+    args << "-quiet";
+    args << "-zoom";
+    args << directory;
+    //获取当前窗口号，并将mplayer的输出嵌入当前窗口中
+    args << "-wid" << QString::number(_show.winId());//将_show的窗口号转换为字符串添加在-wid后面
+
+    VideoProcess.start(tr("C:\\Program Files\\SMPlayer\\mplayer\\mplayer.exe"), args);
+    VideoProcess.write(QString("mute 1\n").toUtf8());//静音
+    VideoProcess.write(QString("vo_fullscreen\n").toUtf8());//_show窗口全屏
+}
+
+void MyWidget::slotButton3Clicked()
+{
+    //打开字幕
+    _strSub = QFileDialog::getOpenFileName(
+                this,
+                tr("Choose subtitle file"),
+                _strDir,
+                "All files(*.*);;(*.srt);;(*.ass);;(*.sub);;(*.ssa);;(*.smi)");
+    //if (!_strSub.isEmpty())qDebug() << _strSub;
+    QFileInfo fileInfo(_strSub);//获取文件目录
+    _strDir = fileInfo.filePath();//保存这次打开文件目录
+
+#if 0
+    //尝试打开字幕文件，利用C++自身来转换字幕文件的编码
+    //待开发。。。。。。
+    QFile file(_strDir);
+    file.open(QIODevice::ReadWrite);
+    QString subs = file.readAll();
+    file.seek(0);
+    file.write(subs.toStdWString());
+    file.close();
+#endif
+
+    //构造加载字幕命令："sub_load directory\n"
+    QString sub;
+    sub += "sub_load ";
+    sub += _strSub;
+    sub += "\n";
+    VideoProcess.write(sub.toUtf8());//加载字幕
+    VideoProcess.write(QString("sub_file 1\n").toUtf8());//显示字幕
+}
+
+void MyWidget::slotButton4Clicked()
+{
+    this->showMinimized();//最小化
+}
+void MyWidget::slotButton5Clicked()
+{
+    //窗口全屏\活动切换
+    if(this->windowState()==Qt::WindowFullScreen){
+        this->setWindowState(Qt::WindowActive);
+    }
+    else this->setWindowState(Qt::WindowFullScreen);
+}
+void MyWidget::slotButton6Clicked()
+{
+    this->close();//退出
+    //exit(1);
+}
+void MyWidget::slotButton7Clicked()
+{
+    VideoProcess.write(QString("sub_delay 0.3\n").toUtf8());//字幕滞后
+}
+void MyWidget::slotButton8Clicked()
+{
+    VideoProcess.write(QString("sub_delay -0.3\n").toUtf8());//字幕提前
+}
+
+void MyWidget::keyPressEvent(QKeyEvent * ev)
+{
+    //ev->modifiers();//修饰符，使用组合键时要使用
+    int key = ev->key();//获取的都是大写字母的ascii码
+    //如果按下Esc键
+    if(key==16777216)this->close();//退出
+    //如果按下Enter键
+    if(key==16777220){
+        if(this->windowState()==Qt::WindowFullScreen){
+            this->setWindowState(Qt::WindowActive);
+        }
+        else this->setWindowState(Qt::WindowFullScreen);
+        hideORshowToolsbar();
+    }
+    //空格键暂停\播放
+    if(key==32){
+        VideoProcess.write(QString("pause\n").toUtf8());//暂停\播放
+        isPause = 1-isPause;//暂停\播放状态切换
+    }
+    //'<'字幕滞后
+    if(key==44){
+         VideoProcess.write(QString("sub_delay 0.3\n").toUtf8());//字幕滞后
+    }
+    //'>'字幕提前
+    if(key==46){
+         VideoProcess.write(QString("sub_delay -0.3\n").toUtf8());//字幕提前
+    }
+    //F打开文件
+    if(key==70) slotButton2Clicked();
+    //L打开字幕
+    if(key==76) slotButton3Clicked();
+
+    //Left后退
+    if(key==16777234){
+        key_RL_isPressed = true;
+        secNow-=15;
+        _slider1->setValue(secNow);
+        //VideoProcess.write(QString("seek %1 2\n").arg(secNow).toUtf8());
+    }
+    //Right前进
+    if(key==16777236){
+        key_RL_isPressed = true;
+        secNow+=15;
+        _slider1->setValue(secNow);
+        //VideoProcess.write(QString("seek %1 2\n").arg(secNow).toUtf8());
+    }
+    //当左右方向键按下时，左侧当前时间跟着变化
+    if(key_RL_isPressed){
+        //如果调整播放进度时，视频为暂停状态，则将其切换为播放状态
+        //否则当进度调整完毕时，视频自动变为播放状态，但此时记录的仍然是暂停状态，导致时间不更新
+        if(isPause){
+            VideoProcess.write(QString("pause\n").toUtf8());
+            isPause = 1-isPause;//暂停\播放状态切换
+        }
+        canReadTimeValue = false;//暂停读取查询结果中的时间
+        QString showNowTime;
+        showNowTime += QString::number(secNow/60);
+        showNowTime += ":";
+        showNowTime += QString::number(secNow%60);
+        _label4->setText(showNowTime);
+
+        //当在全屏状态下通过左右方向键调整进度时，显示进度条和两个时间label
+        if(this->windowState()==Qt::WindowFullScreen){
+            _slider1->setVisible(true);
+            _label4->setVisible(true);
+            _label5->setVisible(true);
+        }
+    }
+    //Up音量加
+    if(key==16777235) _slider2->setValue(_slider2->value()+3);
+    //Down音量减
+    if(key==16777237) _slider2->setValue(_slider2->value()-3);
+
+    //K字幕乱码，转换编码
+    if(key==75) slotButton1Clicked();
+
+    //J截屏
+    if(key==74) Screenshot();
+
+    //H切换样式
+    if(key==72){
+        //nowStyleKind=5时回滚到0
+        if(nowStyleKind < 8)nowStyleKind = (nowStyleKind+1)%8;
+        SetAllStyle(nowStyleKind);
+    }
+
+    //G手动改变NotePad++.exe的路径
+    if(key==71){
+        QFile file("Setting");
+        file.open(QIODevice::ReadWrite);
+        _strNotePad = QFileDialog::getOpenFileName(
+                    this,
+                    tr("Find notepad++.exe"),
+                    "/",
+                    "(*.exe)");
+        //路径不为空
+        if (!_strNotePad.isEmpty()){
+            //找到路径后，将其写入配置文件相应位置
+            file.seek(300);
+            QString strNotePad;
+            strNotePad += _strNotePad;
+            strNotePad += "\n";
+            file.write(strNotePad.toUtf8());
+            file.close();
+        }
+    }
+
+    qDebug()<<key;
+    return QWidget::keyPressEvent(ev);
+}
+
+void MyWidget::hideORshowToolsbar()
+{
+    //当窗口处于活动状态且工具栏处于隐藏状态时，显示工具栏
+    if(this->windowState()==Qt::WindowActive && true==toolsHide)
+    {
+        _slider1->setVisible(true);
+        _slider2->setVisible(true);
+        _slider3->setVisible(true);
+        _button1->setVisible(true);
+        _button2->setVisible(true);
+        _button3->setVisible(true);
+        _button4->setVisible(true);
+        _button5->setVisible(true);
+        _button6->setVisible(true);
+        _button7->setVisible(true);
+        _button8->setVisible(true);
+        _label1->setVisible(true);
+        _label2->setVisible(true);
+        _label3->setVisible(true);
+        _label4->setVisible(true);
+        _label5->setVisible(true);
+        SetAllStyle(nowStyleKind);//重新回到原来的样式
+        toolsHide = false;
+    }
+    //当窗口处于全屏状态且工具栏处于显示状态时，隐藏工具栏
+    if(this->windowState()==Qt::WindowFullScreen && false==toolsHide)
+    {
+        _slider1->setVisible(false);
+        _slider2->setVisible(false);
+        _slider3->setVisible(false);
+        _button1->setVisible(false);
+        _button2->setVisible(false);
+        _button3->setVisible(false);
+        _button4->setVisible(false);
+        _button5->setVisible(false);
+        _button6->setVisible(false);
+        _button7->setVisible(false);
+        _button8->setVisible(false);
+        _label1->setVisible(false);
+        _label2->setVisible(false);
+        _label3->setVisible(false);
+        _label4->setVisible(false);
+        _label5->setVisible(false);
+        this->setStyleSheet("background-color: black");
+        toolsHide = true;
+    }
+}
+
+//当一直按着某个键时，会不停的触发keyPressEvent和keyReleaseEvent
+void MyWidget::keyReleaseEvent(QKeyEvent * ev)
+{
+    int key = ev->key();
+    //当释放左右方向键时
+    if(key==16777234||key==16777236){
+        //qDebug()<<secNow;
+
+        key_RL_isPressed = false;
+        //视频进度定位到改变后的秒数
+        VideoProcess.write(QString("seek %1 2\n").arg(secNow).toUtf8());
+
+        timerDelayGetTime->start();//延迟500ms后再开始读取查询结果中的时间
+
+        //当在全屏状态下通过左右方向键调整进度完毕时，隐藏进度条和两个时间label
+        if(this->windowState()==Qt::WindowFullScreen){
+            _slider1->setVisible(false);
+            _label4->setVisible(false);
+            _label5->setVisible(false);
+        }
+    }
+
+    return QWidget::keyReleaseEvent(ev);
+}
+
+
+///*去掉标题栏后，实现鼠标拖动窗口*/
+void MyWidget::mousePressEvent(QMouseEvent *event)
+{
+    int x = event->pos().x();
+    int y = event->pos().y();//记录鼠标按压位置
+    if (x >= 0 && x <= this->width())
+    {
+        if (y >= 0 && y <= this->height())
+        {
+            m_isPressed = true;//按压位置在窗口内
+            m_startMovePos = event->pos();//将鼠标按下位置作为窗口移动的起始坐标
+        }
+    }
+    //鼠标右键点击
+    //跳转到（点击位置横坐标/窗口宽度）*视频总长度 的位置播放
+    if (event->button()==Qt::RightButton)
+    {
+        //如果调整播放进度时，视频为暂停状态，则将其切换为播放状态
+        //否则当进度调整完毕时，视频自动变为播放状态，但此时记录的仍然是暂停状态，导致时间不更新
+        if(isPause){
+            VideoProcess.write(QString("pause\n").toUtf8());
+            isPause = 1-isPause;//暂停\播放状态切换
+        }
+        VideoProcess.write(QString("seek %1 2\n").arg(x*secAll/this->width()).toUtf8());
+    }
+    //鼠标左键单击暂停\播放
+    if (event->button()==Qt::LeftButton){
+        VideoProcess.write(QString("pause\n").toUtf8());
+        isPause = 1-isPause;//暂停\播放状态切换
+    }
+    //鼠标中键单击全屏\活动
+    if (event->button()==Qt::MiddleButton){
+        if(this->windowState()==Qt::WindowFullScreen){
+            this->setWindowState(Qt::WindowActive);
+        }
+        else this->setWindowState(Qt::WindowFullScreen);
+        hideORshowToolsbar();
+    }
+
+    return QWidget::mousePressEvent(event);
+}
+void MyWidget::mouseMoveEvent(QMouseEvent *event)
+{
+    //当鼠标按在窗口内部并且是活动窗口时
+    if (m_isPressed&&this->windowState()==Qt::WindowActive)
+    {
+        QPoint movePoint = event->globalPos();//记录鼠标当前移动到的位置
+        //m_startMovePos = event->globalPos();
+        //窗口在x,y轴分量的的移动距离分别为movePoint和m_startMovePos坐标分量的差值
+        this->move(movePoint.x() - m_startMovePos.x(), movePoint.y() - m_startMovePos.y());
+    }
+
+    return QWidget::mouseMoveEvent(event);
+}
+void MyWidget::mouseReleaseEvent(QMouseEvent *event)
+{
+    m_isPressed = false;//鼠标释放
+    return QWidget::mouseReleaseEvent(event);
+}
+
+void MyWidget::Screenshot()
+{
+    //截屏
+    //保存截屏的文件夹为空
+    if(_strScreenshot.isEmpty()){
+        //暂停视频
+        VideoProcess.write(QString("pause\n").toUtf8());
+        isPause = 1-isPause;//暂停\播放状态切换
+        //选择文件夹
+        _strScreenshot = QFileDialog::getExistingDirectory(
+                    this,
+                    tr("Choose directory to save screenshot"),
+                    _strDir,
+                    QFileDialog::ShowDirsOnly);
+        if(_strScreenshot.isEmpty()) _strScreenshot=_strDir;
+        //选择文件夹的时候不截屏，因为此时截屏有文件夹选择对话框的残影
+        return;
+    }
+    //mplayer自己的截屏命令不起作用
+    //screenshot <value>
+    //VideoProcess.write(QString("screenshot 0\n").toUtf8());
+
+    //对整个屏幕截图
+    QScreen* screen = QGuiApplication::primaryScreen();
+    //在整个屏幕的截图中选取_show窗口所在的矩形框区域保存到pixmap
+    //注意this窗口的位置是相对屏幕的，而_show窗口的位置是相对this的
+    QPixmap screenshot = screen->grabWindow(0).copy(QRect(this->x()+_show.x(),
+                                                          this->y()+_show.y(),
+                                                          _show.width(),
+                                                          _show.height()));
+    //构造文件名
+    QString filename = _strScreenshot;
+    filename += "/";
+    //用截图时间作为文件名
+    filename += QDateTime::currentDateTime().toString("yyyy-MM-dd hh-mm-ss-zzz");//
+    filename += ".png";
+    //将pixmap保存到文件
+    screenshot.save(filename, nullptr , -1);
+}
+
+void MyWidget::closeEvent(QCloseEvent *event)
+{
+    //关闭之前保存路径，样式等
+    QFile file("Setting");//指定文件
+    file.open(QIODevice::ReadWrite);//读写模式打开指定的文件
+    file.seek(1);//定位到第1个字节
+    file.write(QByteArray::number(nowStyleKind));
+    file.seek(2);
+    file.write("\n");
+    file.seek(3);
+    QString dir;
+    dir += _strDir;
+    dir += "\n";
+    file.write(dir.toUtf8());
+    file.seek(299);
+    file.write("\n");
+    file.close();
+    return QWidget::closeEvent(event);
+}
+
+//设置播放器样式
+void MyWidget::SetAllStyle(int styleKind)
+{
+    QString buttonStyle1;
+    QString labelStyle1;
+    QString labelStyle2;
+    QString sliderStyle1;
+    QString sliderStyle2;
+    QPixmap* nkplayer = nullptr;
+
+    switch (styleKind) {
+    case 0:
+        //窗口初始背景颜色
+        this->setStyleSheet("background-color: white");
+        //button样式
+        buttonStyle1=QStringLiteral("\
+                QPushButton{font-family:'华文中宋';font:bold;font-size:20px;color:white;}\
+                QPushButton{background-color:rgb(255,80,80)}\
+                QPushButton:hover{background-color:rgb(150,250,100)}");
+        //时间、音量、速度label样式
+        labelStyle1=QStringLiteral("\
+                font-family:'微软雅黑';font:bold;font-size:20px;color:rgb(255,80,80);\
+                background:transparent;");
+        //音量、速度slider样式
+        sliderStyle1="\
+                QSlider::add-page:Horizontal{background-color:rgb(200,250,200); height:4px;}\
+                QSlider::sub-page:Horizontal{background-color:yellow; height:4px;}\
+                QSlider::groove:Horizontal{background:transparent;height:6px;}\
+                QSlider::handle:Horizontal{height: 20px;width:20px;background-color:rgb(50,200,200);margin: -8 0px;}";
+        //主进度条slider样式
+        sliderStyle2="\
+                QSlider::add-page:Horizontal{background-color:rgb(200,250,200);height:4px;}\
+                QSlider::sub-page:Horizontal{background-color:yellow;height:4px;}\
+                QSlider::groove:Horizontal{background:transparent;height:6px;}\
+                QSlider::handle:Horizontal{height: 20px;width:20px;background-color:rgb(50,200,200);margin: -8 0px;}";
+        //播放器标志图片
+        nkplayer = new QPixmap("C://Users//Administrator//Desktop//nkplayer.png");
+        break;
+
+    case 1:
+        //窗口初始背景颜色
+        this->setStyleSheet("background-color: black");
+        //button样式
+        buttonStyle1=QStringLiteral("\
+                QPushButton{font-family:'华文中宋';font:bold;font-size:20px;color:white;}\
+                QPushButton{background-color:rgb(255,80,80)}\
+                QPushButton:hover{background-color:rgb(150,250,100)}");
+        //时间、音量、速度label样式
+        labelStyle1=QStringLiteral("\
+                font-family:'微软雅黑';font:bold;font-size:20px;color:rgb(255,80,80);\
+                background:transparent;");
+        //音量、速度slider样式
+        sliderStyle1="\
+                QSlider::add-page:Horizontal{background-color:rgb(200,250,200); height:4px;}\
+                QSlider::sub-page:Horizontal{background-color:yellow; height:4px;}\
+                QSlider::groove:Horizontal{background:transparent;height:6px;}\
+                QSlider::handle:Horizontal{height: 20px;width:20px;background-color:rgb(50,200,200);margin: -8 0px;}";
+        //主进度条slider样式
+        sliderStyle2="\
+                QSlider::add-page:Horizontal{background-color:rgb(200,250,200);height:4px;}\
+                QSlider::sub-page:Horizontal{background-color:yellow;height:4px;}\
+                QSlider::groove:Horizontal{background:transparent;height:6px;}\
+                QSlider::handle:Horizontal{height: 20px;width:20px;background-color:rgb(50,200,200);margin: -8 0px;}";
+        //播放器标志图片
+        nkplayer = new QPixmap("C://Users//Administrator//Desktop//nkplayer.png");
+        break;
+
+    case 2:
+        //窗口初始背景颜色
+        this->setStyleSheet("background-color: black");
+        //button样式
+        buttonStyle1=QStringLiteral("\
+                QPushButton{font-family:'华文中宋';font:bold;font-size:20px;color:black;}\
+                QPushButton{background-color:rgb(100,230,150)}\
+                QPushButton:hover{background-color:red}");
+        //时间、音量、速度label样式
+        labelStyle1=QStringLiteral("\
+                font-family:'微软雅黑';font:bold;font-size:20px;color:rgb(0,230,230);\
+                background:transparent;");
+        //音量、速度slider样式
+        sliderStyle1="\
+                QSlider::add-page:Horizontal{background-color:rgb(0, 50, 50); height:4px;}\
+                QSlider::sub-page:Horizontal{background-color:rgb(0,230,230); height:4px;}\
+                QSlider::groove:Horizontal{background:transparent;height:6px;}\
+                QSlider::handle:Horizontal{height: 20px;width:20px;background-color:rgbrgb(0,230,230);margin: -8 0px;}";
+        //主进度条slider样式
+        sliderStyle2="\
+                QSlider::add-page:Horizontal{background-color: rgb(0, 50, 50);height:4px;}\
+                QSlider::sub-page:Horizontal{background-color:rgbrgb(0,230,230);height:4px;}\
+                QSlider::groove:Horizontal{background:transparent;height:6px;}\
+                QSlider::handle:Horizontal{height: 20px;width:20px;background-color:rgbrgb(0,230,230);margin: -8 0px;}";
+        //播放器标志图片
+        nkplayer = new QPixmap("C://Users//Administrator//Desktop//nkplayer.png");
+        break;
+
+    case 3:
+        //窗口初始背景颜色
+        this->setStyleSheet("background-color: rgb(0, 100, 50)");
+        //button样式
+        buttonStyle1=QStringLiteral("\
+                QPushButton{font-family:'华文中宋';font:bold;font-size:20px;color:rgb(180,0,0);}\
+                QPushButton{background-color:rgb(200,150,0)}\
+                QPushButton:hover{background-color:rgb(50,50,200)}");
+        //时间、音量、速度label样式
+        labelStyle1=QStringLiteral("\
+                font-family:'微软雅黑';font:bold;font-size:20px;color:rgb(200,150,0);\
+                background:transparent;");
+        //音量、速度slider样式
+        sliderStyle1="\
+                QSlider::add-page:Horizontal{background-color:rgb(140, 150, 160); height:4px;}\
+                QSlider::sub-page:Horizontal{background-color:black; height:4px;}\
+                QSlider::groove:Horizontal{background:transparent;height:6px;}\
+                QSlider::handle:Horizontal{height: 20px;width:20px;background-color:black;margin: -8 0px;}";
+        //主进度条slider样式
+        sliderStyle2="\
+                QSlider::add-page:Horizontal{background-color: rgb(140, 150, 160);height:4px;}\
+                QSlider::sub-page:Horizontal{background-color:black;height:4px;}\
+                QSlider::groove:Horizontal{background:transparent;height:6px;}\
+                QSlider::handle:Horizontal{height: 20px;width:20px;background-color:black;margin: -8 0px;}";
+        //播放器标志图片
+        nkplayer = new QPixmap("C://Users//Administrator//Desktop//nkplayer.png");
+        break;
+
+    case 4:
+        //窗口初始背景颜色
+        this->setStyleSheet("background-color: yellow");
+        //button样式
+        buttonStyle1=QStringLiteral("\
+                QPushButton{font-family:'华文中宋';font:bold;font-size:20px;color:white;}\
+                QPushButton{background-color:red}\
+                QPushButton:hover{background-color:rgb(0,200,0)}");
+        //时间、音量、速度label样式
+        labelStyle1=QStringLiteral("\
+                font-family:'微软雅黑';font:bold;font-size:20px;color:black;\
+                background:transparent;");
+        //音量、速度slider样式
+        sliderStyle1="\
+                QSlider::add-page:Horizontal{background-color:rgb(140, 150, 160); height:4px;}\
+                QSlider::sub-page:Horizontal{background-color:black; height:4px;}\
+                QSlider::groove:Horizontal{background:transparent;height:6px;}\
+                QSlider::handle:Horizontal{height: 20px;width:20px;background-color:black;margin: -8 0px;}";
+        //主进度条slider样式
+        sliderStyle2="\
+                QSlider::add-page:Horizontal{background-color: rgb(140, 150, 160);height:4px;}\
+                QSlider::sub-page:Horizontal{background-color:black;height:4px;}\
+                QSlider::groove:Horizontal{background:transparent;height:6px;}\
+                QSlider::handle:Horizontal{height: 20px;width:20px;background-color:black;margin: -8 0px;}";
+        //播放器标志图片
+        nkplayer = new QPixmap("C://Users//Administrator//Desktop//nkplayer.png");
+        break;
+
+    case 5:
+        //窗口初始背景颜色
+        this->setStyleSheet("background-color: red");
+        //button样式
+        buttonStyle1=QStringLiteral("\
+                QPushButton{font-family:'华文中宋';font:bold;font-size:20px;color:rgb(250,250,150);}\
+                QPushButton{background-color:black}\
+                QPushButton:hover{background-color:red}");
+        //时间、音量、速度label样式
+        labelStyle1=QStringLiteral("\
+                font-family:'微软雅黑';font:bold;font-size:20px;color:rgb(250,250,150);\
+                background:transparent;");
+        //音量、速度slider样式
+        sliderStyle1="\
+                QSlider::add-page:Horizontal{background-color:rgb(250,250,150); height:4px;}\
+                QSlider::sub-page:Horizontal{background-color:black; height:4px;}\
+                QSlider::groove:Horizontal{background:transparent;height:6px;}\
+                QSlider::handle:Horizontal{height: 20px;width:20px;background-color:black;margin: -8 0px;}";
+        //主进度条slider样式
+        sliderStyle2="\
+                QSlider::add-page:Horizontal{background-color: rgb(250,250,150);height:4px;}\
+                QSlider::sub-page:Horizontal{background-color:black;height:4px;}\
+                QSlider::groove:Horizontal{background:transparent;height:6px;}\
+                QSlider::handle:Horizontal{height: 20px;width:20px;background-color:black;margin: -8 0px;}";
+        //播放器标志图片
+        nkplayer = new QPixmap("C://Users//Administrator//Desktop//nkplayer.png");
+        break;
+
+    case 6:
+        //窗口初始背景颜色
+        this->setStyleSheet("background-color: rgb(100,200,250)");
+        //button样式
+        buttonStyle1=QStringLiteral("\
+                QPushButton{font-family:'华文中宋';font:bold;font-size:20px;color:white;}\
+                QPushButton{background-color:rgb(140, 150, 160)}\
+                QPushButton:hover{background-color:rgb(250,150,0)}");
+        //时间、音量、速度label样式
+        labelStyle1=QStringLiteral("\
+                font-family:'微软雅黑';font:bold;font-size:20px;color:black;\
+                background:transparent;");
+        //音量、速度slider样式
+        sliderStyle1="\
+                QSlider::add-page:Horizontal{background-color:rgb(140, 150, 160); height:4px;}\
+                QSlider::sub-page:Horizontal{background-color:black; height:4px;}\
+                QSlider::groove:Horizontal{background:transparent;height:6px;}\
+                QSlider::handle:Horizontal{height: 20px;width:20px;background-color:black;margin: -8 0px;}";
+        //主进度条slider样式
+        sliderStyle2="\
+                QSlider::add-page:Horizontal{background-color: rgb(140, 150, 160);height:4px;}\
+                QSlider::sub-page:Horizontal{background-color:black;height:4px;}\
+                QSlider::groove:Horizontal{background:transparent;height:6px;}\
+                QSlider::handle:Horizontal{height: 20px;width:20px;background-color:black;margin: -8 0px;}";
+        //播放器标志图片
+        nkplayer = new QPixmap("C://Users//Administrator//Desktop//nkplayer.png");
+        break;
+
+    case 7:
+        //窗口初始背景颜色
+        this->setStyleSheet("background-color: rgb(150,250,100)");
+        //button样式
+        buttonStyle1=QStringLiteral("\
+                QPushButton{font-family:'华文中宋';font:bold;font-size:20px;color:white;}\
+                QPushButton{background-color:rgb(140, 150, 160)}\
+                QPushButton:hover{background-color:rgb(250,150,0)}");
+        //时间、音量、速度label样式
+        labelStyle1=QStringLiteral("\
+                font-family:'微软雅黑';font:bold;font-size:20px;color:black;\
+                background:transparent;");
+        //音量、速度slider样式
+        sliderStyle1="\
+                QSlider::add-page:Horizontal{background-color:rgb(140, 150, 160); height:4px;}\
+                QSlider::sub-page:Horizontal{background-color:black; height:4px;}\
+                QSlider::groove:Horizontal{background:transparent;height:6px;}\
+                QSlider::handle:Horizontal{height: 20px;width:20px;background-color:black;margin: -8 0px;}";
+        //主进度条slider样式
+        sliderStyle2="\
+                QSlider::add-page:Horizontal{background-color: rgb(140, 150, 160);height:4px;}\
+                QSlider::sub-page:Horizontal{background-color:black;height:4px;}\
+                QSlider::groove:Horizontal{background:transparent;height:6px;}\
+                QSlider::handle:Horizontal{height: 20px;width:20px;background-color:black;margin: -8 0px;}";
+        //播放器标志图片
+        nkplayer = new QPixmap("C://Users//Administrator//Desktop//nkplayer.png");
+        break;
+
+    }
+
+    _label4->setStyleSheet(labelStyle1);
+    _label5->setStyleSheet(labelStyle1);
+    _slider1->setStyleSheet(sliderStyle2);
+    _button2->setStyleSheet(buttonStyle1);
+    _button3->setStyleSheet(buttonStyle1);
+    _button8->setStyleSheet(buttonStyle1);
+    _button7->setStyleSheet(buttonStyle1);
+    _label1->setStyleSheet(labelStyle1);
+    _slider2->setStyleSheet(sliderStyle1);
+    _label3->setToolTip(QStringLiteral("###欢迎使用NKPlayer!\n————————————\n###操作指南:\n打开文件 F\n打开字幕 L\n字幕提前 <\n字幕滞后 >\n\
+字幕乱码 K\n暂停\\播放 Space\\左键单击\n全屏\\活动 Enter\\鼠标中键\n退出 Esc\n移动窗口 鼠标按住拖动\n音量+ UP\n\
+音量- DOWN\n前进 RIGHT\n后退 LEFT\n视频定位 右键单击\n截屏 J\n切换皮肤 H\n重设NotePad++路径 G\n————————————\n###注意:字幕乱码时需要在\n弹出的窗口中编码一栏选择\n转换为\
+ANSI或其他编码，然\n后点击保存，最后关闭弹出\n程序即可\n————————————\n###有问题联系:\n1204219458@qq.com"));
+    _label3->setPixmap(*nkplayer);
+    _label2->setStyleSheet(labelStyle1);
+    _slider3->setStyleSheet(sliderStyle1);
+    _button1->setStyleSheet(buttonStyle1);
+    _button4->setStyleSheet(buttonStyle1);
+    _button5->setStyleSheet(buttonStyle1);
+    _button6->setStyleSheet(buttonStyle1);
+}
+
+MyWidget::~MyWidget(){}
