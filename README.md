@@ -2,3 +2,11 @@
 基于QT框架和mplayer内核开发的一款音视频两用播放器。
 ## 启动界面：
 ![image](https://github.com/Nyankotigle/NKPlayer/blob/master/images/%E5%90%AF%E5%8A%A8%E7%95%8C%E9%9D%A2.png)
+## 打开视频文件界面：
+![image](https://github.com/Nyankotigle/NKPlayer/blob/master/images/%E6%89%93%E5%BC%80%E8%A7%86%E9%A2%91%E6%96%87%E4%BB%B6%E7%95%8C%E9%9D%A2.png)
+## 视频播放界面：
+![image](https://github.com/Nyankotigle/NKPlayer/blob/master/images/%E6%92%AD%E6%94%BE%E5%99%A8%E7%95%8C%E9%9D%A2.png)
+## 操作提示窗口：
+![image](https://github.com/Nyankotigle/NKPlayer/blob/master/images/%E8%A7%86%E9%A2%91%E6%92%AD%E6%94%BE%E5%99%A8%E6%93%8D%E4%BD%9C%E8%AF%B4%E6%98%8E.png)
+## 播放列表界面：
+![image](https://github.com/Nyankotigle/NKPlayer/blob/master/images/%E8%A7%86%E9%A2%91%E6%92%AD%E6%94%BE%E5%88%97%E8%A1%A8.png)
